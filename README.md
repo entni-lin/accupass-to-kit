@@ -19,9 +19,9 @@ git clone https://github.com/entni-lin/accupass-to-kit.git
 ```
 
 ## 如何使用 Script
-### 建議：建立虛擬環境
+### 建議：先建立虛擬環境
 ```bash
-python3 -m venv .venv
+python3 -m venv .venv # Python 2.x
 source .venv/bin/activate    # macOS / Linux
 ```
 ### 安裝所需 Module
