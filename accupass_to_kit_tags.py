@@ -1,16 +1,27 @@
 # -*- coding: utf-8 -*-
 """
 accupass_to_kit_tags.py
-Usage:
-  python accupass_to_kit_tags.py --input accupass.csv --output kit_import.csv --activity "講座型(202506數創小聚)"
+
+功能：
+1) 主要轉換：擷取 Accupass 指定欄位、標準化成 *_new 欄位、產生 tag、姓名/Email 比對，輸出主 CSV
+2) 兩人同行票：擷取「第二人 email」，過濾現有訂閱者名單後，補上 name/tags，輸出第二個 CSV
+
+用法範例：
+  python accupass_to_kit_tags.py \
+    --input ../accupass_export_csv/2025_08AI_all.csv \
+    --output kit_import.csv \
+    --activity "講座型(202508數創小聚)" \
+    --subscribers ./subscribers.csv \
+    --group-output group_new_list.csv
 """
 
 import argparse
 import sys
 from pathlib import Path
+
 import pandas as pd
 
-# --- 1) 欄位設定（請確保與 Accupass 匯出欄名完全一致） ---
+# --- 0) 共用常數 ---
 COL_ORDER = [
     "訂購人姓名",
     "訂購人Email",
@@ -20,8 +31,9 @@ COL_ORDER = [
     "請問您的「整體」工作年資為?",
     "已參加數創小聚次數",
 ]
+GROUP_COL = "若為購買兩人同行票，請問第二人的email為？"  # 原始欄名（含全形問號）
 
-# --- 2) 對應表：職稱 → 職稱_new ---
+# --- 1) 對應表：職稱 → 職稱_new ---
 TITLE_MAP = {
     "企業高階主管 Founder/ Executives": "高層/ 策略決策者：創辦人/ 高階主管",
     "其他團隊主管 Other Team Lead": "管理/策略職：其他團隊主管",
@@ -36,7 +48,7 @@ TITLE_MAP = {
     "學生 Student": "仍在學：學生",
 }
 
-# --- 3) 對應表：年資 → 年資_new ---
+# --- 2) 對應表：年資 → 年資_new ---
 SENIORITY_MAP = {
     "<=2年": "年資：0 - 2年（剛入行/ 新鮮人）",
     "2~5年": "年資：2 - 5年（穩定工作中）",
@@ -44,39 +56,62 @@ SENIORITY_MAP = {
     "10年以上": "年資：10 年以上（資深或主管）",
 }
 
-# --- 4) 對應表：參與次數 → 次數_new ---
+# --- 3) 對應表：參與次數 → 次數_new ---
 FREQ_MAP = {
     "從未參加過": "參與頻率：首次參加",
     "1次": "參與頻率：參加 2 次",      # 依你的規格
     "2次以上": "參與頻率：3 次(含) 以上",
 }
 
-# ---- 輔助：正規化 ----
+# ---- 4) 輔助：正規化 ----
 def _norm_str(x):
     if pd.isna(x):
         return ""
     return str(x).strip()
 
 def _norm_name(x):
-    # 名字：去頭尾空白；不做大小寫轉換（中文名不影響，英文名保留大小寫敏感度）
     return _norm_str(x)
 
 def _norm_email(x):
-    # Email：去頭尾空白 + 小寫
+    # Email：去頭尾空白 + 小寫（沿用你的原規則）
     return _norm_str(x).lower()
 
 def _equal_nonempty(a, b, norm_fn):
-    """兩邊都非空才比較；其餘一律回 0"""
+    """兩邊都非空才比較；否則回 0"""
     na, nb = norm_fn(a), norm_fn(b)
     if not na or not nb:
         return 0
     return 1 if na == nb else 0
 
+def read_csv_fallback(path: Path) -> pd.DataFrame:
+    last_err = None
+    for enc in ("utf-8-sig", "utf-8", "cp950"):
+        try:
+            return pd.read_csv(path, encoding=enc)
+        except Exception as e:
+            last_err = e
+    raise RuntimeError(f"無法讀取 CSV：{path}（最後錯誤：{last_err}）")
+
+def find_email_column(columns) -> str | None:
+    # 先找完全等於 "email"（不分大小寫）
+    for c in columns:
+        if str(c).strip().lower() == "email":
+            return c
+    # 再寬鬆找含有 "email" 的欄名
+    for c in columns:
+        if "email" in str(c).strip().lower():
+            return c
+    return None
+
 def main():
-    parser = argparse.ArgumentParser(description="Convert Accupass CSV to Kit-ready CSV with tags.")
+    parser = argparse.ArgumentParser(
+        description="Convert Accupass CSV to Kit-ready CSV with tags, and build group-ticket second-person list."
+    )
     parser.add_argument("--input", "-i", required=True, help="Accupass 參與人員名單 CSV 路徑")
-    parser.add_argument("--output", "-o", default=None, help="輸出 CSV 路徑（預設：<input_name>_kit.csv）")
+    parser.add_argument("--output", "-o", default=None, help="第一個輸出：主轉換結果 CSV（預設：<input>_kit.csv）")
     parser.add_argument("--activity", "-a", default=None, help='活動屬性字串，例如：講座型(202506數創小聚)')
+    parser.add_argument("--subscribers", "-s", default=None, help="現有訂閱者名單 CSV（需含 email 欄位）")
+    parser.add_argument("--group-output", "-g", default=None, help="第二個輸出：兩人同行第二人、去重後的 Email 名單 CSV（預設：<input>_group_new_list.csv）")
     args = parser.parse_args()
 
     in_path = Path(args.input)
@@ -84,22 +119,19 @@ def main():
         print(f"[錯誤] 找不到輸入檔：{in_path}", file=sys.stderr)
         sys.exit(1)
 
+    # 預設輸出路徑
     out_path = Path(args.output) if args.output else in_path.with_name(in_path.stem + "_kit.csv")
+    group_out_path = Path(args.group_output) if args.group_output else in_path.with_name(in_path.stem + "_group_new_list.csv")
 
-    # 嘗試以 utf-8-sig / utf-8 / big5 讀取，最大程度相容
-    last_err = None
-    for enc in ("utf-8-sig", "utf-8", "cp950"):
-        try:
-            df = pd.read_csv(in_path, encoding=enc)
-            break
-        except Exception as e:
-            last_err = e
-            df = None
-    if df is None:
-        print(f"[錯誤] 無法讀取 CSV（最後錯誤：{last_err}）", file=sys.stderr)
+    # ---------- 只讀一次原始 CSV ----------
+    try:
+        df_full = read_csv_fallback(in_path)
+    except Exception as e:
+        print(f"[錯誤] {e}", file=sys.stderr)
         sys.exit(1)
 
-    # 僅保留指定欄位（若缺少會補空欄）
+    # ---------- 建立主流程 df（基於 df_full） ----------
+    df = df_full.copy()
     for col in COL_ORDER:
         if col not in df.columns:
             df[col] = ""
@@ -115,24 +147,14 @@ def main():
     freq_src = "已參加數創小聚次數"
     df["已參加數創小聚次數_new"] = df[freq_src].apply(lambda v: FREQ_MAP.get(_norm_str(v), _norm_str(v)))
 
-    # 規則 4：若職稱_new == "仍在學：學生" → 年資_new = "年資：我還是學生"
+    # 規則：若職稱_new == "仍在學：學生" → 年資_new = "年資：我還是學生"
     mask_student = df["最接近您工作內容的職稱_new"] == "仍在學：學生"
     df.loc[mask_student, "請問您的「整體」工作年資為_new"] = "年資：我還是學生"
 
-    # ----- 新增 3 個比較欄位 -----
-    # 1) 姓名比較：兩邊皆非空，且去空白後完全一致 → 1，否則 0
-    df["姓名比較"] = [
-        _equal_nonempty(o, p, _norm_name)
-        for o, p in zip(df["訂購人姓名"], df["參加人姓名"])
-    ]
+    # 比對欄位
+    df["姓名比較"] = [_equal_nonempty(o, p, _norm_name) for o, p in zip(df["訂購人姓名"], df["參加人姓名"])]
+    df["Email比較"] = [_equal_nonempty(o, p, _norm_email) for o, p in zip(df["訂購人Email"], df["參加人Email"])]
 
-    # 2) Email比較：兩邊皆非空，且去空白小寫後一致 → 1，否則 0
-    df["Email比較"] = [
-        _equal_nonempty(o, p, _norm_email)
-        for o, p in zip(df["訂購人Email"], df["參加人Email"])
-    ]
-
-    # 3) 姓名_Email比較：依姓名比較/Email比較的組合給值
     def combine_flag(n_eq, e_eq):
         if n_eq == 1 and e_eq == 1:
             return "同一個人"
@@ -153,7 +175,7 @@ def main():
             activity = ""
     df["活動屬性"] = activity
 
-    # tag：合併四個欄位（忽略空字串），用逗號分隔
+    # tag 欄
     def build_tag(row):
         parts = [
             _norm_str(row.get("最接近您工作內容的職稱_new", "")),
@@ -166,7 +188,7 @@ def main():
 
     df["tag"] = df.apply(build_tag, axis=1)
 
-    # 輸出：保留原 7 欄 + 新欄
+    # --- 第一個輸出（主轉換檔） ---
     output_cols = COL_ORDER + [
         "最接近您工作內容的職稱_new",
         "請問您的「整體」工作年資為_new",
@@ -177,11 +199,54 @@ def main():
         "Email比較",
         "姓名_Email比較",
     ]
-    # 去除重複欄名保險起見
     output_cols = list(dict.fromkeys(output_cols))
-
     df.to_csv(out_path, index=False, encoding="utf-8-sig")
-    print(f"[完成] 已輸出：{out_path.resolve()}")
+    print(f"[完成] 已輸出主轉換檔：{out_path.resolve()}")
+
+    # ---------- 兩人同行票第二人 email：基於 df_full ----------
+    if GROUP_COL in df_full.columns:
+        group_df = df_full[[GROUP_COL]].copy()
+        group_df.rename(columns={GROUP_COL: "group_ticket_email"}, inplace=True)
+
+        # 清理與過濾：非空才保留
+        group_df["group_ticket_email"] = group_df["group_ticket_email"].apply(_norm_email)
+        group_df = group_df[group_df["group_ticket_email"] != ""].reset_index(drop=True)
+        print(f"[資訊] 兩人同行第二人原始 email 筆數：{len(group_df)}")
+    else:
+        group_df = pd.DataFrame(columns=["group_ticket_email"])
+        print(f"[警告] 原始檔缺少欄位「{GROUP_COL}」，將輸出空的兩人同行名單。")
+
+    # --- 去掉已存在Email：比對現有訂閱者名單（可選） ---
+    if args.subscribers and not group_df.empty:
+        sub_path = Path(args.subscribers)
+        if not sub_path.exists():
+            print(f"[警告] 找不到 subscribers 檔案：{sub_path}，跳過去掉已存在Email步驟。", file=sys.stderr)
+        else:
+            try:
+                sub_df = read_csv_fallback(sub_path)
+                email_col = find_email_column(sub_df.columns)
+                if not email_col:
+                    print(f"[警告] subscribers 檔未找到 email 欄位，跳過去掉已存在Email步驟。", file=sys.stderr)
+                else:
+                    sub_emails = sub_df[email_col].map(_norm_email)
+                    sub_set = set(e for e in sub_emails if e)
+                    before = len(group_df)
+                    group_df = group_df[~group_df["group_ticket_email"].isin(sub_set)].reset_index(drop=True)
+                    removed = before - len(group_df)
+                    print(f"[資訊] 已依訂閱者名單去重：移除 {removed} 筆已存在的 email。")
+            except Exception as e:
+                print(f"[警告] 讀取/處理 subscribers 檔失敗，跳過去掉已存在Email步驟：{e}", file=sys.stderr)
+
+    # 補上固定欄位：name / tags
+    if not group_df.empty:
+        group_df["name"] = "數創夥伴"
+        group_df["tags"] = activity  # 使用同一個 activity 字串
+    else:
+        group_df = pd.DataFrame(columns=["group_ticket_email", "name", "tags"])
+
+    # --- 第二個輸出（兩人同行第二人新名單） ---
+    group_df.to_csv(group_out_path, index=False, encoding="utf-8-sig")
+    print(f"[完成] 已輸出二人同行第二人新名單：{group_out_path.resolve()}")
 
 if __name__ == "__main__":
     main()

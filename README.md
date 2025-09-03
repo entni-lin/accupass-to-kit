@@ -11,7 +11,9 @@
 - 產生活動欄位 `活動屬性`（由執行參數或互動輸入）
 - 產生 `tag` 欄位（職稱_new、年資_new、參與次數_new、活動屬性 以逗號連接）
 - 新增比對欄位：`姓名比較`、`Email比較`、`姓名_Email比較`
-- 輸出 CSV（Excel 友善）
+- **兩個輸出 CSV 檔：**
+  1. 主轉換結果（供 Kit 匯入）
+  2. 兩人同行票第二人新名單（已去除現有訂閱者，並附上 `name` 與 `tags`）
 
 ## 下載 Script
 ```bash
@@ -34,13 +36,18 @@ pip install -r requirements.txt
 
 ### 執行以下 Command to proceed
 Tips: 
-- 把 input & output 檔名換掉（根據所在的 Working directory，更改相對檔案位置）
+- 所有的檔名，請根據所在的 Working directory，更改相對檔案位置
+- 更改 input （來自 Accuspass）& output（要 Import 至 Kit）檔名
+- 更改 subscribers 檔名（Kit confirmed subscribers 名單，請**每次跑流程時重新下載一次**）
+- 更改 group-output 檔名（兩人同行票的第二人的 Email，也是要 Import 至 Kit）
 - 換掉活動名稱
 - 最後執行以下 command
 ```bash
 python accupass_to_kit_tags.py \
-  --input "input.csv" \
-  --output "output.csv" \
-  --activity "講座型(202508數創小聚)"
+  --input ../accupass_export_csv/2025_08AI_all.csv \
+  --output kit_import.csv \
+  --activity "講座型(202508數創小聚)" \
+  --subscribers ./subscribers.csv \
+  --group-output group_new_list.csv
 ```
 
