@@ -40,13 +40,13 @@ Tips:
 - 更改 input （來自 Accuspass）& output（要 Import 至 Kit）檔名
 - 更改 subscribers 檔名（Kit confirmed subscribers 名單，請**每次跑流程時重新下載一次**）
 - 更改 group-output 檔名（兩人同行票的第二人的 Email，也是要 Import 至 Kit）
-- 換掉活動名稱
+- 換掉活動名稱（前面記得加**活動屬性：**）
 - 最後執行以下 command
 ```bash
 python accupass_to_kit_tags.py \
   --input ../accupass_export_csv/2025_08AI_all.csv \
   --output kit_import.csv \
-  --activity "講座型(202508數創小聚)" \
+  --activity "活動屬性：講座型(202508數創小聚)" \
   --subscribers ./subscribers.csv \
   --group-output group_new_list.csv
 ```
