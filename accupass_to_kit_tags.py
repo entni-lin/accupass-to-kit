@@ -216,7 +216,7 @@ def main():
         group_df = pd.DataFrame(columns=["group_ticket_email"])
         print(f"[警告] 原始檔缺少欄位「{GROUP_COL}」，將輸出空的兩人同行名單。")
 
-    # --- 去掉已存在Email：比對現有訂閱者名單（可選） ---
+    # --- 去掉已存在Email：(1) 比對現有訂閱者名單（可選） ---
     if args.subscribers and not group_df.empty:
         sub_path = Path(args.subscribers)
         if not sub_path.exists():
@@ -236,6 +236,13 @@ def main():
                     print(f"[資訊] 已依訂閱者名單去重：移除 {removed} 筆已存在的 email。")
             except Exception as e:
                 print(f"[警告] 讀取/處理 subscribers 檔失敗，跳過去掉已存在Email步驟：{e}", file=sys.stderr)
+    
+    # --- 去掉已存在Email：(2) 原始 input 的「參加人Email」欄位（新增的需求） ---
+    if not group_df.empty and "參加人Email" in df.columns:
+        participant_emails = set(e for e in df["參加人Email"].map(_norm_email) if e)
+        before = len(group_df)
+        group_df = group_df[~group_df["group_ticket_email"].isin(participant_emails)].reset_index(drop=True)
+        print(f"[資訊] 依原始『參加人Email』去重：移除 {before - len(group_df)} 筆。")
 
     # 補上固定欄位：name / tags
     if not group_df.empty:
