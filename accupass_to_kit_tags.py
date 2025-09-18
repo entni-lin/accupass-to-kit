@@ -50,17 +50,31 @@ TITLE_MAP = {
 
 # --- 2) 對應表：年資 → 年資_new ---
 SENIORITY_MAP = {
+    "0年": "年資：0 - 2年（剛入行/ 新鮮人）",
+    "<1年": "年資：0 - 2年（剛入行/ 新鮮人）",
+    "1-3年": "年資：0 - 2年（剛入行/ 新鮮人）",
     "<=2年": "年資：0 - 2年（剛入行/ 新鮮人）",
     "2~5年": "年資：3 - 5年（穩定工作中）",
+    "3-5年": "年資：3 - 5年（穩定工作中）",
     "5~10年": "年資：6 - 10年（中階實務經驗）",
+    "5-10年": "年資：6 - 10年（中階實務經驗）",
     "10年以上": "年資：10 年以上（資深或主管）",
+    "10-15年": "年資：10 年以上（資深或主管）",
+    "15年以上": "年資：10 年以上（資深或主管）"
 }
 
 # --- 3) 對應表：參與次數 → 次數_new ---
 FREQ_MAP = {
     "從未參加過": "參與頻率：首次參加",
     "1次": "參與頻率：參加 2 次",      # 依你的規格
+    "1-2次": "參與頻率：參加 2 次",
+    "1-2 次": "參與頻率：參加 2 次",
     "2次以上": "參與頻率：3 次(含) 以上",
+    "3-5次": "參與頻率：3 次(含) 以上",
+    "3-5 次": "參與頻率：3 次(含) 以上",
+    "5-10次": "參與頻率：3 次(含) 以上",
+    "5-10 次": "參與頻率：3 次(含) 以上",
+    "10次以上": "參與頻率：3 次(含) 以上"
 }
 
 # ---- 4) 輔助：正規化 ----
@@ -217,41 +231,51 @@ def main():
         print(f"[警告] 原始檔缺少欄位「{GROUP_COL}」，將輸出空的兩人同行名單。")
 
     # --- 去掉已存在Email：(1) 比對現有訂閱者名單（可選） ---
+    dup_sub_col = "__dup_subscriber"
+    group_df[dup_sub_col] = False  # 預設都不重複
     if args.subscribers and not group_df.empty:
         sub_path = Path(args.subscribers)
         if not sub_path.exists():
-            print(f"[警告] 找不到 subscribers 檔案：{sub_path}，跳過去掉已存在Email步驟。", file=sys.stderr)
+            print(f"[警告] 找不到 subscribers 檔案：{sub_path}，跳過尋找已存在Email步驟。", file=sys.stderr)
         else:
             try:
                 sub_df = read_csv_fallback(sub_path)
                 email_col = find_email_column(sub_df.columns)
                 if not email_col:
-                    print(f"[警告] subscribers 檔未找到 email 欄位，跳過去掉已存在Email步驟。", file=sys.stderr)
+                    print(f"[警告] subscribers 檔未找到 email 欄位，跳過尋找已存在Email步驟。", file=sys.stderr)
                 else:
                     sub_emails = sub_df[email_col].map(_norm_email)
                     sub_set = set(e for e in sub_emails if e)
-                    before = len(group_df)
-                    group_df = group_df[~group_df["group_ticket_email"].isin(sub_set)].reset_index(drop=True)
-                    removed = before - len(group_df)
-                    print(f"[資訊] 已依訂閱者名單去重：移除 {removed} 筆已存在的 email。")
+                    #before = len(group_df)
+                    #group_df = group_df[~group_df["group_ticket_email"].isin(sub_set)].reset_index(drop=True)
+                    #removed = before - len(group_df)
+                    group_df[dup_sub_col] = group_df["group_ticket_email"].isin(sub_set)
+                    print(f"[資訊] 已依訂閱者名單找重複：有 {group_df[dup_sub_col].sum()} 筆已存在的 email。")
             except Exception as e:
-                print(f"[警告] 讀取/處理 subscribers 檔失敗，跳過去掉已存在Email步驟：{e}", file=sys.stderr)
+                print(f"[警告] 讀取/處理 subscribers 檔失敗，跳過尋找已存在Email步驟：{e}", file=sys.stderr)
     
     # --- 去掉已存在Email：(2) 原始 input 的「參加人Email」欄位（新增的需求） ---
     if not group_df.empty and "參加人Email" in df.columns:
         participant_emails = set(e for e in df["參加人Email"].map(_norm_email) if e)
         before = len(group_df)
         group_df = group_df[~group_df["group_ticket_email"].isin(participant_emails)].reset_index(drop=True)
-        print(f"[資訊] 依原始『參加人Email』去重：移除 {before - len(group_df)} 筆。")
+        print(f"[資訊] 依原始『參加人Email』去已存在的Email：移除 {before - len(group_df)} 筆。")
 
     # 補上固定欄位：name / tags
     if not group_df.empty:
         group_df["name"] = "數創夥伴"
         group_df["tags"] = activity  # 使用同一個 activity 字串
+        # 和訂閱者重複的保留 row，但 name 置空
+        if dup_sub_col in group_df.columns:
+            blanked = int(group_df[dup_sub_col].sum())
+            group_df.loc[group_df[dup_sub_col], "name"] = ""
+            print(f"[資訊] 因與訂閱者重複而保留且 name 留白的筆數：{blanked}")
     else:
         group_df = pd.DataFrame(columns=["group_ticket_email", "name", "tags"])
 
     # --- 第二個輸出（兩人同行第二人新名單） ---
+    if "__dup_subscriber" in group_df.columns:
+        group_df = group_df.drop(columns=["__dup_subscriber"])
     group_df.to_csv(group_out_path, index=False, encoding="utf-8-sig")
     print(f"[完成] 已輸出二人同行第二人新名單：{group_out_path.resolve()}")
 
